@@ -1,0 +1,2 @@
+barcode,name,brand,quantity_value,quantity_unit,category,retailer_sku,listing_name,product_url,image_url,price_cents,currency
+6009876543220,Fresh Full Cream Milk,Test Dairy,2,litre,Dairy,CHK-MILK-003,Fresh Full Cream Milk 2L,https://example.com/milk,https://example.com/milk.jpg,3299,ZAR
