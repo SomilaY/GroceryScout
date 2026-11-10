@@ -13,4 +13,8 @@ class RetailerProduct < ApplicationRecord
   validates :retailer_sku,
             uniqueness: { scope: :retailer_id },
             allow_blank: true
+
+            validates :product_url,
+          uniqueness: { scope: :retailer_id },
+          allow_blank: true
 end

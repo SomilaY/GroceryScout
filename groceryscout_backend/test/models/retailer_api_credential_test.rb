@@ -72,4 +72,18 @@ class RetailerApiCredentialTest < ActiveSupport::TestCase
 
     assert_equal original_revoked_at, credential.reload.revoked_at
   end
+
+
+  test "becomes inactive when its retailer is deactivated" do
+    credential, = RetailerApiCredential.issue_for!(
+      retailer: @retailer
+    )
+
+    assert credential.active?
+
+    @retailer.update!(active: false)
+
+    assert_not credential.active?
+  end
+
 end

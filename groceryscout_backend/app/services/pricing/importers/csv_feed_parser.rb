@@ -29,11 +29,19 @@ module Pricing
       end
 
       def call
-        csv = CSV.parse(@file.read, headers: true)
+        contents = @file.read
 
-        headers = Array(csv.headers).map do |header|
-          header&.strip&.downcase
-        end
+if contents.blank?
+  raise ArgumentError,
+        "CSV must contain a header row and at least one data row"
+end
+
+rows = CSV.parse(contents)
+raw_headers = rows.shift
+
+       headers = Array(raw_headers).map do |header|
+  header&.strip&.downcase
+end
 
         if headers.any?(&:blank?)
           raise ArgumentError, "CSV contains an empty column name"
@@ -57,10 +65,18 @@ module Pricing
                 "Unsupported columns: #{unknown_headers.join(', ')}"
         end
 
-        csv.map.with_index do |row, index|
-          record = headers.each_with_index.each_with_object({}) do |(header, column_index), result|
-            result[header.to_sym] = row.fields[column_index]&.strip
-          end
+       if rows.empty?
+  raise ArgumentError, "CSV must contain at least one data row"
+end
+        rows.map.with_index do |row, index|
+  if row.length > headers.length
+    raise ArgumentError,
+          "Row #{index + 2}: Contains more values than the headers"
+  end
+
+  record = headers.each_with_index.each_with_object({}) do |(header, column_index), result|
+    result[header.to_sym] = row[column_index]&.strip
+  end
 
           if record[:name].blank?
             raise ArgumentError,

@@ -67,16 +67,26 @@ class Pricing::PriceIngestionServiceTest < ActiveSupport::TestCase
     end
   end
 
+    test "rejects a price observation dated too far in the future" do
+    assert_raises(ArgumentError) do
+      build_service(
+        observed_at: 6.minutes.from_now
+      ).call
+    end
+  end
+
   private
 
-  def build_service(
+   def build_service(
     price_cents: 2949,
-    currency: "ZAR"
+    currency: "ZAR",
+    observed_at: Time.current
   )
     Pricing::PriceIngestionService.new(
       retailer_product_id: @listing.id,
       price_cents: price_cents,
       currency: currency,
+      observed_at: observed_at,
       source: "development_test_data"
     )
   end

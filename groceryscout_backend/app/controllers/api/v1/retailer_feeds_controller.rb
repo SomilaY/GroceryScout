@@ -1,6 +1,17 @@
 
 class Api::V1::RetailerFeedsController < ApplicationController
-  before_action :authenticate_retailer!
+  rate_limit to: 20,
+           within: 1.minute,
+           by: -> { @retailer_api_credential.id },
+           with: -> {
+             render json: {
+               error: "Too many import requests. Please try again later."
+             }, status: :too_many_requests
+           }
+
+  prepend_before_action :authenticate_retailer!
+
+  rescue_from StandardError, with: :handle_unexpected_error if Rails.env.production?
 
   MAX_FILE_SIZE = 5.megabytes
   MAX_CSV_ROWS = 10_000
@@ -16,9 +27,10 @@ class Api::V1::RetailerFeedsController < ApplicationController
     listing_name
     product_url
     image_url
-    price_cents
+       price_cents
     currency
     observed_at
+    in_stock
   ].freeze
 
   def create
@@ -39,6 +51,12 @@ class Api::V1::RetailerFeedsController < ApplicationController
         error: "Records must be an array"
       }, status: :unprocessable_entity
     end
+
+    if records.length > MAX_CSV_ROWS
+  return render json: {
+    error: "JSON import cannot contain more than 10,000 records"
+  }, status: :unprocessable_entity
+end
 
     unless records.all? { |record|
       record.is_a?(ActionController::Parameters) || record.is_a?(Hash)
@@ -143,5 +161,22 @@ class Api::V1::RetailerFeedsController < ApplicationController
     render json: {
       error: "Invalid or missing retailer API key"
     }, status: :unauthorized
+  end
+
+    def handle_unexpected_error(error)
+    Rails.logger.error(
+      {
+        event: "retailer_feed_unexpected_error",
+        request_id: request.request_id,
+        exception_class: error.class.name
+      }.to_json
+    )
+
+    raise error if performed?
+
+    render json: {
+      error: "An unexpected error occurred while processing the import.",
+      request_id: request.request_id
+    }, status: :internal_server_error
   end
 end

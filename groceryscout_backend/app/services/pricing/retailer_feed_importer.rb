@@ -36,8 +36,9 @@ module Pricing
             product_name: listing.product.name
           }
         rescue ArgumentError,
-               ActiveRecord::RecordInvalid,
-               ActiveRecord::RecordNotFound => error
+       ActiveRecord::RecordInvalid,
+       ActiveRecord::RecordNotFound,
+       ActiveRecord::RecordNotUnique => error
 
           failed << {
             index: index,

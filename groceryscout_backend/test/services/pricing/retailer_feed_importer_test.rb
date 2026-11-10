@@ -101,6 +101,48 @@ class Pricing::RetailerFeedImporterTest < ActiveSupport::TestCase
     assert_equal 1, result[:failed].first[:index]
   end
 
+    test "continues importing when a database uniqueness conflict occurs" do
+    importer = Pricing::RetailerFeedImporter.new(
+      retailer_slug: "shoprite"
+    )
+
+    adapter = importer.instance_variable_get(:@adapter)
+    original_import = adapter.method(:import)
+    calls = 0
+
+    adapter.define_singleton_method(:import) do |record|
+      calls += 1
+
+      if calls == 1
+        raise ActiveRecord::RecordNotUnique, "duplicate key"
+      end
+
+      original_import.call(record)
+    end
+
+    result = importer.call(
+      records: [
+        {
+          barcode: "6001234567895",
+          name: "Conflicting Milk",
+          price_cents: 2999
+        },
+        {
+          barcode: "6001234567896",
+          name: "Successfully Imported Milk",
+          price_cents: 3199
+        }
+      ]
+    )
+
+    assert_equal 2, result[:total]
+    assert_equal 1, result[:imported_count]
+    assert_equal 1, result[:failed_count]
+    assert_equal 0, result[:failed].first[:index]
+    assert_equal "Successfully Imported Milk",
+                 Product.find_by(barcode: "6001234567896").name
+  end
+
   test "rejects unsupported retailers" do
     assert_raises(ArgumentError) do
       Pricing::RetailerFeedImporter.new(
@@ -117,5 +159,33 @@ class Pricing::RetailerFeedImporterTest < ActiveSupport::TestCase
     assert_raises(ArgumentError) do
       importer.call(records: "not an array")
     end
+  end
+
+    test "continues importing when records have unexpected formats" do
+    importer = Pricing::RetailerFeedImporter.new(
+      retailer_slug: "shoprite"
+    )
+
+    result = importer.call(
+      records: [
+        nil,
+        "invalid record",
+        123,
+        {
+          barcode: "6001234567894",
+          name: "Valid Milk After Malformed Records",
+          price_cents: 2999
+        }
+      ]
+    )
+
+    assert_equal 4, result[:total]
+    assert_equal 1, result[:imported_count]
+    assert_equal 3, result[:failed_count]
+
+    assert_equal [0, 1, 2], result[:failed].map { |failure| failure[:index] }
+
+    assert_equal "Valid Milk After Malformed Records",
+                 Product.find_by(barcode: "6001234567894").name
   end
 end

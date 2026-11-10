@@ -10,12 +10,15 @@ class PriceObservation < ApplicationRecord
   validates :observed_at, presence: true
   validates :source, presence: true
 
-  def fresh?
-    observed_at.present? && observed_at >= FRESHNESS_WINDOW.ago
+    def fresh?
+    observed_at.present? &&
+      observed_at <= Time.current &&
+      observed_at >= FRESHNESS_WINDOW.ago
   end
 
   def stale?
-    observed_at.present? && !fresh?
+    observed_at.present? &&
+      observed_at < FRESHNESS_WINDOW.ago
   end
 
   def age_in_hours

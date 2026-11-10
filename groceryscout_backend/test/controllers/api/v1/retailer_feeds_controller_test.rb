@@ -1,5 +1,6 @@
 
 require "test_helper"
+require "stringio"
 
 class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
   setup do
@@ -35,6 +36,20 @@ class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
     assert_response :unauthorized
   end
 
+
+  test "returns a controlled error for malformed JSON" do
+    post "/api/v1/retailer_feeds/import",
+         params: '{"records": [',
+         headers: {
+           "Content-Type" => "application/json",
+           "X-Retailer-API-Key" => @raw_token
+         }
+
+    assert_response :bad_request
+    assert_equal "application/json", response.media_type
+  end
+
+
   test "rejects revoked API credentials" do
     @credential.revoke!
 
@@ -59,6 +74,29 @@ class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
     assert_response :unauthorized
   end
 
+  test "rejects JSON import request bodies larger than 5 MB" do
+  oversized_value = "a" * (5 * 1024 * 1024)
+
+  payload = {
+    records: [],
+    padding: oversized_value
+  }.to_json
+
+  post "/api/v1/retailer_feeds/import",
+       params: payload,
+       headers: {
+         "Content-Type" => "application/json",
+         "X-Retailer-API-Key" => @raw_token
+       }
+
+  assert_response :content_too_large
+
+  assert_equal(
+    "JSON request body cannot exceed 5 MB",
+    response.parsed_body["error"]
+  )
+end
+
   test "accepts valid credentials and rejects a non-array records payload" do
     post "/api/v1/retailer_feeds/import",
          params: { records: "not-an-array" },
@@ -74,6 +112,34 @@ class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
 
     assert_not_nil @credential.reload.last_used_at
   end
+
+
+  test "rejects JSON imports containing more than 10,000 records" do
+    records = Array.new(10_001) do |index|
+      {
+        barcode: "600987654#{index.to_s.rjust(4, '0')}",
+        name: "Test Product #{index}",
+        price_cents: 2999
+      }
+    end
+
+    post "/api/v1/retailer_feeds/import",
+     params: { records: records },
+     headers: {
+       "X-Retailer-API-Key" => @raw_token
+     },
+     as: :json
+
+    assert_response :unprocessable_entity
+
+    assert_equal(
+      "JSON import cannot contain more than 10,000 records",
+      response.parsed_body["error"]
+    )
+
+    assert_equal 0, Product.count
+  end
+
 
 
   test "imports a product, price and image using a valid retailer key" do
@@ -93,13 +159,15 @@ class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
                image_url: "https://example.com/milk.jpg",
                price_cents: 3299,
                currency: "ZAR",
-               observed_at: Time.current.iso8601
+               observed_at: Time.current.iso8601,
+               in_stock: true
              }
            ]
          },
-         headers: {
+                 headers: {
            "X-Retailer-API-Key" => @raw_token
-         }
+         },
+         as: :json
 
     assert_response :success
 
@@ -122,6 +190,7 @@ class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "TEST-MILK-001", listing.retailer_sku
     assert_equal "https://example.com/milk.jpg", listing.image_url
     assert_equal "https://example.com/milk", listing.product_url
+    assert_equal true, listing.in_stock
 
     observation = PriceObservation.find_by!(
       retailer_product: listing
@@ -142,7 +211,8 @@ class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
              retailer_slug: "shoprite",
              retailer_id: 999,
              retailer_sku: "CHK-MILK-002",
-             price_cents: 2999
+             price_cents: 2999,
+              admin: true,
            }
          ]
        },
@@ -159,6 +229,42 @@ class Api::V1::RetailerFeedsControllerTest < ActionDispatch::IntegrationTest
   assert_equal @retailer.id, listing.retailer_id
   assert_equal "checkers", listing.retailer.slug
 end
+
+
+  test "imports an out-of-stock product through the JSON API" do
+    post "/api/v1/retailer_feeds/import",
+         params: {
+           records: [
+             {
+               barcode: "6009876543220",
+               name: "Out of Stock Milk",
+               retailer_sku: "TEST-MILK-OUT-001",
+               price_cents: 3299,
+               in_stock: false
+             }
+           ]
+         },
+         headers: {
+           "X-Retailer-API-Key" => @raw_token
+         },
+         as: :json
+
+    assert_response :success
+
+    body = response.parsed_body
+
+    assert_equal 1, body["imported_count"]
+    assert_equal 0, body["failed_count"]
+
+    product = Product.find_by!(barcode: "6009876543220")
+    listing = RetailerProduct.find_by!(
+      retailer: @retailer,
+      product: product
+    )
+
+    assert_equal false, listing.in_stock
+    assert_equal 3299, listing.price_observations.order(observed_at: :desc).first.price_cents
+  end
 
 
   test "imports a CSV file using a valid retailer API key" do
@@ -236,5 +342,96 @@ end
 end
 
 
+ 
+  test "rejects CSV files larger than 5 MB" do
+    Tempfile.create(["oversized", ".csv"]) do |tempfile|
+      tempfile.write("a" * (5.megabytes + 1))
+      tempfile.rewind
+
+      file = Rack::Test::UploadedFile.new(
+        tempfile.path,
+        "text/csv"
+      )
+
+      post "/api/v1/retailer_feeds/import",
+           params: { file: file },
+           headers: {
+             "X-Retailer-API-Key" => @raw_token
+           }
+
+      assert_response :unprocessable_entity
+
+      assert_equal(
+        "CSV file cannot exceed 5 MB",
+        response.parsed_body["error"]
+      )
+
+      assert_equal 0, Product.count
+    end
+  end
+
+
+  
+  test "rejects CSV files containing more than 10,000 data rows" do
+    rows = Array.new(
+      10_001,
+      "6009876543210,Test Milk,2999"
+    )
+
+    csv = (["barcode,name,price_cents"] + rows).join("\n")
+
+    Tempfile.create(["too_many_rows", ".csv"]) do |tempfile|
+      tempfile.write(csv)
+      tempfile.rewind
+
+      file = Rack::Test::UploadedFile.new(
+        tempfile.path,
+        "text/csv"
+      )
+
+      post "/api/v1/retailer_feeds/import",
+           params: { file: file },
+           headers: {
+             "X-Retailer-API-Key" => @raw_token
+           }
+
+      assert_response :unprocessable_entity
+
+      assert_equal(
+        "CSV cannot contain more than 10,000 data rows",
+        response.parsed_body["error"]
+      )
+
+      assert_equal 0, Product.count
+    end
+  end
+
+test "rate limits import requests per retailer credential" do
+ Api::V1::RetailerFeedsController.cache_store.clear
+
+  20.times do
+    post "/api/v1/retailer_feeds/import",
+         params: { records: "not-an-array" },
+         headers: {
+           "X-Retailer-API-Key" => @raw_token
+         }
+
+    assert_response :unprocessable_entity
+  end
+
+  post "/api/v1/retailer_feeds/import",
+       params: { records: "not-an-array" },
+       headers: {
+         "X-Retailer-API-Key" => @raw_token
+       }
+
+  assert_response :too_many_requests
+  assert_equal(
+    "Too many import requests. Please try again later.",
+    response.parsed_body["error"]
+  )
+ensure
+  Api::V1::RetailerFeedsController.cache_store.clear
+end
 
 end

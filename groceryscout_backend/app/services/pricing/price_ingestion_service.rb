@@ -2,6 +2,7 @@
 module Pricing
   class PriceIngestionService
     SUPPORTED_CURRENCIES = %w[ZAR].freeze
+        MAX_FUTURE_SKEW = 5.minutes
 
     def initialize(
       retailer_product_id:,
@@ -26,6 +27,10 @@ module Pricing
 
       unless SUPPORTED_CURRENCIES.include?(@currency)
         raise ArgumentError, "Unsupported currency"
+      end
+
+      if @observed_at.present? && @observed_at > Time.current + MAX_FUTURE_SKEW
+        raise ArgumentError, "Price observation timestamp cannot be more than 5 minutes in the future"
       end
 
       PriceObservation.create!(

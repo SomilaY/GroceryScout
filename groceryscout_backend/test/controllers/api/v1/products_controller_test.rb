@@ -132,12 +132,16 @@ class Api::V1::ProductsControllerTest < ActionDispatch::IntegrationTest
   end
 
     test "returns the latest price observation for each retailer" do
-    PriceObservation.create!(
-      retailer_product: @checkers_listing,
-      price_cents: 2799,
-      observed_at: 1.hour.from_now,
-      source: "manual_test"
-    )
+  @checkers_listing.price_observations.first.update!(
+    observed_at: 2.hours.ago
+  )
+
+  PriceObservation.create!(
+    retailer_product: @checkers_listing,
+    price_cents: 2799,
+    observed_at: 1.hour.ago,
+    source: "manual_test"
+  )
 
     get "/api/v1/products", params: { search: "milk" }
 
@@ -196,7 +200,47 @@ class Api::V1::ProductsControllerTest < ActionDispatch::IntegrationTest
     assert_equal 29.99, checkers_price["price"]
   end
 
-    test "filters products by category" do
+  test "ignores future-dated price observations" do
+    PriceObservation.create!(
+      retailer_product: @checkers_listing,
+      price_cents: 1999,
+      observed_at: 1.hour.from_now,
+      source: "manual_test"
+    )
+
+    get "/api/v1/products", params: { search: "milk" }
+
+    assert_response :success
+
+    products = JSON.parse(response.body)["products"]
+    prices = products.first["prices"]
+
+    checkers_price = prices.find do |price|
+      price["retailer"] == "Checkers"
+    end
+
+    assert_equal 29.99, checkers_price["price"]
+  end
+
+  test "excludes prices older than seven days from current product comparisons" do
+    @checkers_listing.price_observations.first.update!(
+      observed_at: 8.days.ago
+    )
+
+    get "/api/v1/products", params: { search: "milk" }
+
+    assert_response :success
+
+    products = JSON.parse(response.body)["products"]
+    prices = products.first["prices"]
+
+    retailer_names = prices.map { |price| price["retailer"] }
+
+    assert_equal ["Pick n Pay", "Woolworths"], retailer_names
+    assert_not_includes retailer_names, "Checkers"
+  end
+
+  test "filters products by category" do
     Product.create!(
       name: "White Bread",
       brand: "Albany",
@@ -617,5 +661,43 @@ class Api::V1::ProductsControllerTest < ActionDispatch::IntegrationTest
       "Minimum price cannot exceed maximum price",
       JSON.parse(response.body)["error"]
     )
+  end
+
+    test "returns in stock availability for retailer prices" do
+    @checkers_listing.update!(in_stock: true)
+
+    get "/api/v1/products", params: { search: "milk" }
+
+    assert_response :success
+
+    prices = JSON.parse(response.body)["products"].first["prices"]
+    checkers = prices.find { |price| price["retailer"] == "Checkers" }
+
+    assert_equal true, checkers["in_stock"]
+  end
+
+  test "returns out of stock availability without hiding the price" do
+    @checkers_listing.update!(in_stock: false)
+
+    get "/api/v1/products", params: { search: "milk" }
+
+    assert_response :success
+
+    prices = JSON.parse(response.body)["products"].first["prices"]
+    checkers = prices.find { |price| price["retailer"] == "Checkers" }
+
+    assert_equal false, checkers["in_stock"]
+    assert_equal 29.99, checkers["price"]
+  end
+
+  test "returns unknown availability when stock information is missing" do
+    get "/api/v1/products", params: { search: "milk" }
+
+    assert_response :success
+
+    prices = JSON.parse(response.body)["products"].first["prices"]
+    checkers = prices.find { |price| price["retailer"] == "Checkers" }
+
+    assert_nil checkers["in_stock"]
   end
 end

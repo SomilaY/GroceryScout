@@ -138,4 +138,60 @@ class Pricing::Importers::CsvFeedParserTest < ActiveSupport::TestCase
 
     assert_equal "Invalid CSV file", error.message
   end
+
+
+  test "rejects rows containing more values than the headers" do
+    csv = <<~CSV
+      barcode,name,price_cents
+      6001234567890,Full Cream Milk,2999,unexpected_value
+    CSV
+
+    error = assert_raises(ArgumentError) do
+      Pricing::Importers::CsvFeedParser.new(
+        file: StringIO.new(csv)
+      ).call
+    end
+
+    assert_includes error.message, "Row 2"
+  end
+
+
+    test "rejects CSV files containing headers but no data rows" do
+    csv = <<~CSV
+      barcode,name,price_cents
+    CSV
+
+    error = assert_raises(ArgumentError) do
+      Pricing::Importers::CsvFeedParser.new(
+        file: StringIO.new(csv)
+      ).call
+    end
+
+    assert_equal "CSV must contain at least one data row", error.message
+  end
+
+  test "rejects completely empty CSV files" do
+    error = assert_raises(ArgumentError) do
+      Pricing::Importers::CsvFeedParser.new(
+        file: StringIO.new("")
+      ).call
+    end
+
+    assert_equal "CSV must contain a header row and at least one data row", error.message
+  end
+
+  test "allows rows with fewer values than the headers" do
+  csv = <<~CSV
+    barcode,name,price_cents,brand
+    6001234567890,Full Cream Milk,2999
+  CSV
+
+  records = Pricing::Importers::CsvFeedParser.new(
+    file: StringIO.new(csv)
+  ).call
+
+  assert_equal 1, records.length
+  assert_equal "Full Cream Milk", records.first[:name]
+  assert_nil records.first[:brand]
+end
 end

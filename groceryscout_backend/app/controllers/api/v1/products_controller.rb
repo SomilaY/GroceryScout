@@ -230,11 +230,12 @@ end
 
     listing_ids = listings.map(&:id)
 
-    latest_prices = PriceObservation
-                      .where(
-                        retailer_product_id: listing_ids,
-                        currency: "ZAR"
-                      )
+   latest_prices = PriceObservation
+                  .where(
+                    retailer_product_id: listing_ids,
+                    currency: "ZAR"
+                  )
+                  .where(observed_at: 7.days.ago..Time.current)
                       .select(
                         "DISTINCT ON (price_observations.retailer_product_id) price_observations.*"
                       )
@@ -256,6 +257,7 @@ end
         {
           retailer: listing.retailer.name,
           image_url: listing.image_url,
+           in_stock: listing.in_stock,
           product_url: listing.product_url,
           price: latest_price.price_cents / 100.0,
           currency: latest_price.currency,

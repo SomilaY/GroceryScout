@@ -42,6 +42,13 @@ class PriceObservationTest < ActiveSupport::TestCase
   end
 end
 
+  test "does not identify a future-dated price as fresh" do
+    price = create_price(observed_at: 1.minute.from_now)
+
+    assert_equal false, price.fresh?
+    assert_equal false, price.stale?
+  end
+
   private
 
   def create_price(observed_at:)
